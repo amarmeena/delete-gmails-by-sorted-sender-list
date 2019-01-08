@@ -1,0 +1,48 @@
+import email, getpass, imaplib
+import pandas as pd
+from pick import pick
+
+user = input("Enter your GMail username:")                        #Gets the username password from the user
+pwd = getpass.getpass(r"Enter your password (Generate Google's App specific password - https://support.google.com/accounts/answer/185833): ")
+
+
+m = imaplib.IMAP4_SSL("imap.gmail.com")                           # connecting to the gmail imap server
+m.login(user, pwd)
+mlist = m.list()
+#label_directory = input("Copy paste the email directory you want to download attachments from (format e.g. H:\\ABC\\XYZ): ")
+m.select('"INBOX"')                                               # here you a can choose a mail box like INBOX instead
+# use m.list() to get all the mailboxes
+
+resp, items = m.search(None, "ALL")                               # you could filter using the IMAP rules here (check http://www.example-code.com/csharp/imap-search-critera.asp)
+items = items[0].split()                                          # getting the mails id
+
+body = []
+for emailid in items:
+    resp, data = m.fetch(emailid, "(BODY[HEADER.FIELDS (FROM)])") # fetching the mail, "`(RFC822)`" means "get the whole stuff", but you can ask for headers only, etc
+    email_body = data[0][1]
+    mail = email.message_from_bytes(email_body)                   # parsing the mail content to get a mail object
+    body.append(mail.get_all('from'))
+
+df = pd.DataFrame(body, columns=['from'])
+df['counter'] = 1
+df2 = df.groupby(by='from')['counter'].sum().sort_values(ascending=False).reset_index()
+df2['concat'] = df2['from'].map(str)+" : "+df2['counter'].map(str)
+df2 = df2.join(df2['from'].str.extract(r"(\w+\W\w+\W\w+)", expand=True))
+df2.columns=['from', 'counter', 'concat', 'from_c']
+
+
+title = 'Please pick emails from the sender you want to remove (Use SPACE to mark multiple, ENTER to continue'
+del_emails_from = pick(df2['concat'], title, multi_select=True, min_selection_count=1)
+
+
+del_emails_from = [i for i, j in del_emails_from]
+df_del = pd.DataFrame({'del_from':del_emails_from})
+df_delete = pd.merge(df_del, df2, how='left', left_on='del_from', right_on='concat')
+for i in df_delete['from_c']:
+    typ, data = m.search(None, '(FROM '+i+')')
+    for num in data[0].split():
+        m.store(num, '+FLAGS', '\\Deleted')
+
+m.expunge()
+m.close()
+m.logout()
